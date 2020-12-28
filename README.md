@@ -11,7 +11,7 @@
 # FireFighter Departament of Analítics.
 
 ## Portafolio Personal
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/Alan_Grez/mat281_portfolio_template/master?urlpath=lab)
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/Alan-Grez/firefighter/master?urlpath=lab)
 
 ### Setup
 
