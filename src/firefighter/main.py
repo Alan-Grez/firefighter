@@ -11,11 +11,16 @@ import plotly.graph_objects as go
 
 from firefighter.features.builder import encode_categoricals
 from firefighter.geocoding.geocoder import GeocodingResult, geocode_address, geocode_corner
+from firefighter.geocoding.reverse import reverse_geocode
 from firefighter.io.loader import load_dataset
 from firefighter.models.base import BaseClassifier, ModelResult
 from firefighter.models.classifier import DummyClassifier
 from firefighter.pipelines.predict import run_prediction
-from firefighter.visualization.plots import heatmap, spider
+from firefighter.visualization.plots import (
+    plot_predictions_map,
+    plot_predictions_table,
+    plot_service_radar,
+)
 
 
 @dataclass(frozen=True)
@@ -133,21 +138,31 @@ def _build_model_features(
 
 
 def _build_prediction_table(data: pd.DataFrame, result: ModelResult) -> go.Figure:
-    table_data = {
-        "fecha": data["fecha"].astype(str) if "fecha" in data.columns else data.index.astype(str),
-        "direccion": data.get("direccion", pd.Series([""] * len(data))),
-        "esquina": data.get("esquina", pd.Series([""] * len(data))),
-        "prediccion": result.labels.astype(str),
-    }
-    table_frame = pd.DataFrame(table_data)
-    return go.Figure(
-        data=[
-            go.Table(
-                header={"values": list(table_frame.columns)},
-                cells={"values": [table_frame[col].tolist() for col in table_frame.columns]},
-            )
-        ]
+    data = data.copy()
+    data["prediccion"] = result.labels
+    timestamp_column = "fecha" if "fecha" in data.columns else data.index.name or "index"
+    if timestamp_column == "index":
+        data = data.reset_index()
+    return plot_predictions_table(
+        data,
+        timestamp_column=timestamp_column,
+        prediction_column="prediccion",
     )
+
+
+def _apply_reverse_geocoding(data: pd.DataFrame) -> pd.DataFrame:
+    results = data.apply(
+        lambda row: reverse_geocode(row.get("latitude"), row.get("longitude")),
+        axis=1,
+    )
+    data = data.copy()
+    data["reverse_street"] = results.apply(lambda result: result.street)
+    data["reverse_number"] = results.apply(lambda result: result.number)
+    data["reverse_intersection"] = results.apply(lambda result: result.intersection)
+    data["direccion_resuelta"] = results.apply(
+        lambda result: result.resolved_address or ""
+    )
+    return data
 
 
 def _save_plot(figure: go.Figure, output_dir: Path, filename: str) -> Path:
@@ -205,17 +220,25 @@ def main() -> None:
 
     prediction_data = prediction_data.copy()
     prediction_data["prediccion"] = result.labels
+    prediction_data = _apply_reverse_geocoding(prediction_data)
+
+    if result.probabilities is not None:
+        prediction_data["prediction_probability"] = result.probabilities.max(axis=1)
+        service_probabilities = result.probabilities.mean()
+    else:
+        prediction_data["prediction_probability"] = 1.0
+        service_probabilities = result.labels.value_counts(normalize=True)
 
     heatmap_data = prediction_data.dropna(subset=["latitude", "longitude"]).copy()
     if heatmap_data.empty:
         heatmap_data = prediction_data.assign(latitude=0.0, longitude=0.0)
-    heatmap_data["count"] = 1
 
-    heatmap_figure = heatmap(heatmap_data, x="longitude", y="latitude", value="count")
-    spider_counts = result.labels.value_counts()
-    spider_figure = spider(
-        spider_counts.tolist() or [0],
-        spider_counts.index.tolist() or ["sin_predicciones"],
+    heatmap_figure = plot_predictions_map(heatmap_data)
+    radar_values = service_probabilities.tolist() or [0]
+    radar_services = service_probabilities.index.tolist() or ["sin_predicciones"]
+    spider_figure = plot_service_radar(
+        radar_values,
+        radar_services,
         title="Distribución de predicciones",
     )
     table_figure = _build_prediction_table(prediction_data, result)
